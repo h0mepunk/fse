@@ -64,6 +64,12 @@ class FoodRepository(
     private val json = FatSecretClient.json
     private val diaryRefreshTrigger = MutableStateFlow(0)
 
+    private suspend fun mergeFoodsByPriority(
+        primary: List<Food>,
+        secondary: List<Food>,
+        limit: Int = 50
+    ): List<Food> = (primary + secondary).distinctBy { it.id }.take(limit)
+
     suspend fun searchFoods(query: String, page: Int = 0): Result<List<Food>> {
         val cacheKey = "${query.lowercase()}_$page"
         searchCache.get(cacheKey)?.let { return Result.success(it) }
@@ -167,7 +173,8 @@ class FoodRepository(
                                 ?.foods?.foodList(json)?.map { it.toDomain() } ?: emptyList()
                         } ?: emptyList()
                     }
-                    emit(if (profile.isEmpty()) localFoods.map { it.toDomain() } else profile)
+                    val local = localFoods.map { it.toDomain() }
+                    emit(mergeFoodsByPriority(local, profile))
                 } else {
                     emit(localFoods.map { it.toDomain() })
                 }
@@ -176,6 +183,7 @@ class FoodRepository(
 
     suspend fun addToRecent(food: Food) {
         recentStore.add(StoredFood.from(food))
+        searchCache.clear()
     }
 
     suspend fun refreshDiaryHistoryFromFatSecret(daysBack: Int = 30) {
