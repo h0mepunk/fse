@@ -369,7 +369,11 @@ class FoodRepository(
      * Adds all items of a saved meal to today's diary.
      * Fetches full food details for each item to get nutrition.
      */
-    suspend fun addSavedMealToDiary(meal: SavedMeal): Result<Unit> {
+    suspend fun addSavedMealToDiary(
+        meal: SavedMeal,
+        mealType: MealType = MealType.Other,
+        quantityMultiplier: Double = 1.0
+    ): Result<Unit> {
         val date = LocalDate.now()
         return runCatching {
             meal.items.forEach { item ->
@@ -381,10 +385,10 @@ class FoodRepository(
                 addToDiary(
                     AddToDiaryRequest(
                         date = date,
-                        mealType = MealType.Other,
+                        mealType = mealType,
                         food = food,
                         serving = serving,
-                        multiplier = item.numberOfUnits
+                        multiplier = item.numberOfUnits * quantityMultiplier
                     )
                 )
             }
