@@ -80,7 +80,9 @@ fun SearchFoodScreen(
                 focusManager.clearFocus()
                 isSearching = true
                 scope.launch {
-                    searchResult = withContext(Dispatchers.IO) { container.foodRepository.searchFoods(query) }
+                    searchResult = withContext(Dispatchers.IO) {
+                        container.foodRepository.searchFoodsWithDiaryPriority(query)
+                    }
                     isSearching = false
                 }
             })
@@ -92,7 +94,11 @@ fun SearchFoodScreen(
             searchResult?.fold(
                 onSuccess = { foods ->
                     if (foods.isNotEmpty()) {
-                        Text("Search results", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
+                        Text(
+                            "Search results (top 10 from your diary first)",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(foods, key = { it.id }) { food ->
                                 FoodSearchItem(

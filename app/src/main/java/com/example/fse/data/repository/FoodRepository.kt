@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -96,6 +97,48 @@ class FoodRepository(
             }
             searchCache.put(cacheKey, enriched)
             enriched
+        }
+    }
+
+    suspend fun searchFoodsWithDiaryPriority(
+        query: String,
+        referenceDate: LocalDate = LocalDate.now(),
+        diaryTopLimit: Int = 10
+    ): Result<List<Food>> {
+        val normalized = query.trim().lowercase()
+        if (normalized.isBlank()) return Result.success(emptyList())
+
+        val diaryMatches = diaryStore.allEntries().first()
+            .asSequence()
+            .filter { !it.date.isBefore(referenceDate.minusDays(30)) && !it.date.isAfter(referenceDate) }
+            .filter {
+                val name = it.food.name.lowercase()
+                val brand = it.food.brandName?.lowercase().orEmpty()
+                name.contains(normalized) || brand.contains(normalized)
+            }
+            .sortedWith(
+                compareBy<DiaryEntry> { entry ->
+                    val name = entry.food.name.lowercase()
+                    when {
+                        name.startsWith(normalized) -> 0
+                        name.contains(" $normalized") -> 1
+                        else -> 2
+                    }
+                }.thenByDescending { it.date }
+            )
+            .map { it.food }
+            .distinctBy { it.id }
+            .take(diaryTopLimit.coerceAtLeast(0))
+            .toList()
+
+        val remoteResult = searchFoods(query)
+        val remoteFoods = remoteResult.getOrNull().orEmpty()
+        val merged = (diaryMatches + remoteFoods).distinctBy { it.id }
+
+        return when {
+            merged.isNotEmpty() -> Result.success(merged)
+            remoteResult.isFailure -> Result.failure(remoteResult.exceptionOrNull() ?: Exception("Search failed"))
+            else -> Result.success(emptyList())
         }
     }
 
