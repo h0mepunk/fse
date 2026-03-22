@@ -5,7 +5,6 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import com.example.fse.data.api.FatSecretClient
 import com.example.fse.data.api.FatSecretDto
 import com.example.fse.data.api.FatSecretProfileApi
-import com.example.fse.data.api.FatSecretProfileDto
 import com.example.fse.data.api.toDiaryEntry
 import com.example.fse.data.api.toDomain
 import com.example.fse.data.local.LocalDiaryStore
@@ -21,7 +20,6 @@ import com.example.fse.domain.model.Nutrient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -42,6 +40,14 @@ class FoodRepository(
     private val oauth1TokenStore: com.example.fse.data.auth.OAuth1TokenStore,
     private val searchCache: com.example.fse.data.local.SearchCache<List<Food>> = com.example.fse.data.local.SearchCache()
 ) {
+    data class AddToDiaryRequest(
+        val date: LocalDate,
+        val mealType: MealType,
+        val food: Food,
+        val serving: Serving,
+        val multiplier: Double = 1.0
+    )
+
     private suspend fun getApi(): com.example.fse.data.api.FatSecretApi? {
         oauth1TokenStore.getTokens()?.let { (token, secret) ->
             return FatSecretClient.createPlatformApiWithOAuth1(token, secret)
@@ -129,6 +135,62 @@ class FoodRepository(
         recentStore.add(StoredFood.from(food))
     }
 
+    fun getRecentFoodsForMeal(
+        mealType: MealType,
+        date: LocalDate,
+        daysBack: Long = 30
+    ): Flow<List<Food>> = combine(
+        diaryStore.allEntries(),
+        getRecentFoods()
+    ) { allEntries, fallback ->
+        val fromDate = date.minusDays(daysBack - 1)
+        val foodsByMeal = allEntries
+            .asSequence()
+            .filter { entry ->
+                !entry.date.isBefore(fromDate) &&
+                    !entry.date.isAfter(date) &&
+                    entry.mealType == mealType
+            }
+            .sortedByDescending { it.date }
+            .map { it.food }
+            .distinctBy { it.id }
+            .take(20)
+            .toList()
+        if (foodsByMeal.isNotEmpty()) foodsByMeal else fallback
+    }
+
+    fun getRecentFoodsForMealType(mealType: MealType, date: LocalDate): Flow<List<Food>> =
+        diaryStore.allEntries().map { allEntries ->
+            val fromDate = date.minusDays(30)
+            allEntries
+                .asSequence()
+                .filter { it.mealType == mealType && !it.date.isBefore(fromDate) && !it.date.isAfter(date) }
+                .sortedByDescending { it.date }
+                .map { it.food }
+                .distinctBy { it.id }
+                .take(40)
+                .toList()
+        }
+
+    fun getRecentFoodsForMeal(
+        mealType: MealType,
+        referenceDate: LocalDate = LocalDate.now(),
+        lookbackDays: Long = 30
+    ): Flow<List<Food>> = diaryStore.allEntries().map { entries ->
+        val fromDate = referenceDate.minusDays(lookbackDays)
+        entries
+            .asSequence()
+            .filter { entry ->
+                entry.mealType == mealType &&
+                    !entry.date.isBefore(fromDate) &&
+                    !entry.date.isAfter(referenceDate)
+            }
+            .sortedByDescending { it.date }
+            .distinctBy { it.food.id }
+            .map { it.food }
+            .toList()
+    }
+
     fun getDiary(date: LocalDate): Flow<List<DiaryEntry>> = combine(
         oauth1TokenStore.hasTokens,
         diaryStore.entriesForDate(date),
@@ -199,14 +261,73 @@ class FoodRepository(
             totals.toMap()
         }
 
-    suspend fun addToDiary(entry: DiaryEntry) {
-        diaryStore.add(entry)
-        addToRecent(entry.food)
+    private suspend fun createRemoteFoodEntry(
+        profileApi: FatSecretProfileApi,
+        request: AddToDiaryRequest
+    ): DiaryEntry {
+        val dateInt = ChronoUnit.DAYS.between(LocalDate.of(1970, 1, 1), request.date).toInt()
+        val mealValue = when (request.mealType) {
+            MealType.Breakfast -> "breakfast"
+            MealType.Lunch -> "lunch"
+            MealType.Dinner -> "dinner"
+            MealType.Snack -> "snack"
+            MealType.Other -> "other"
+        }
+        val response = profileApi.createFoodEntry(
+            foodId = request.food.id,
+            foodEntryName = request.food.name,
+            servingId = request.serving.id,
+            numberOfUnits = request.multiplier,
+            meal = mealValue,
+            dateInt = dateInt
+        )
+        if (!response.isSuccessful) {
+            throw Exception("Create food entry failed: ${response.code()}")
+        }
+        val created = response.body()
+            ?.food_entries
+            ?.entryList(json)
+            ?.firstOrNull()
+            ?.toDiaryEntry()
+            ?: throw Exception("Create food entry failed: empty response")
+        return created.copy(mealType = request.mealType)
+    }
+
+    suspend fun addToDiary(request: AddToDiaryRequest): DiaryEntry {
+        val createdEntry = if (oauth1TokenStore.getTokens() != null) {
+            val profileApi = getProfileApi() ?: throw Exception("Not authenticated")
+            createRemoteFoodEntry(profileApi, request)
+        } else {
+            DiaryEntry(
+                id = "d_${System.currentTimeMillis()}_${request.food.id}",
+                date = request.date,
+                mealType = request.mealType,
+                food = request.food,
+                serving = request.serving,
+                multiplier = request.multiplier
+            )
+        }
+        diaryStore.add(createdEntry)
+        addToRecent(createdEntry.food)
         diaryRefreshTrigger.value++
+        return createdEntry
     }
 
     suspend fun removeFromDiary(entryId: String) {
+        if (oauth1TokenStore.getTokens() != null && entryId.all { it.isDigit() }) {
+            val profileApi = getProfileApi() ?: throw Exception("Not authenticated")
+            val response = profileApi.deleteFoodEntry(foodEntryId = entryId)
+            if (!response.isSuccessful) {
+                throw Exception("Delete food entry failed: ${response.code()}")
+            }
+            val ok = response.body()?.success?.value == "1"
+            if (!ok) throw Exception("Delete food entry failed")
+        }
         diaryStore.remove(entryId)
+        diaryRefreshTrigger.value++
+    }
+
+    fun forceDiaryRefresh() {
         diaryRefreshTrigger.value++
     }
 
@@ -224,8 +345,7 @@ class FoodRepository(
                     ?: food.servings.firstOrNull()
                     ?: throw Exception("No serving for ${item.name}")
                 addToDiary(
-                    DiaryEntry(
-                        id = "meal_${meal.id}_${item.id}_${System.currentTimeMillis()}",
+                    AddToDiaryRequest(
                         date = date,
                         mealType = MealType.Other,
                         food = food,
