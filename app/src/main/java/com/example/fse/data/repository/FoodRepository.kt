@@ -135,60 +135,43 @@ class FoodRepository(
         recentStore.add(StoredFood.from(food))
     }
 
-    fun getRecentFoodsForMeal(
-        mealType: MealType,
-        date: LocalDate,
-        daysBack: Long = 30
-    ): Flow<List<Food>> = combine(
+    suspend fun refreshDiaryHistoryFromFatSecret(daysBack: Int = 30) {
+        if (oauth1TokenStore.getTokens() == null) return
+        val profileApi = getProfileApi() ?: return
+        val today = LocalDate.now()
+        repeat(daysBack.coerceAtLeast(1)) { dayOffset ->
+            val date = today.minusDays(dayOffset.toLong())
+            val dateInt = ChronoUnit.DAYS.between(LocalDate.of(1970, 1, 1), date).toInt()
+            val response = runCatching { profileApi.getFoodEntries(dateInt) }.getOrNull() ?: return@repeat
+            if (!response.isSuccessful) return@repeat
+            val entries = response.body()
+                ?.food_entries
+                ?.entryList(json)
+                ?.map { it.toDiaryEntry() }
+                ?: emptyList()
+            entries.forEach { diaryStore.add(it) }
+        }
+        diaryRefreshTrigger.value++
+    }
+
+    fun getRecentFoodsForMealType(mealType: MealType, referenceDate: LocalDate): Flow<List<Food>> = combine(
         diaryStore.allEntries(),
         getRecentFoods()
     ) { allEntries, fallback ->
-        val fromDate = date.minusDays(daysBack - 1)
-        val foodsByMeal = allEntries
+        val fromDate = referenceDate.minusDays(30)
+        val fromDiary = allEntries
             .asSequence()
-            .filter { entry ->
-                !entry.date.isBefore(fromDate) &&
-                    !entry.date.isAfter(date) &&
-                    entry.mealType == mealType
+            .filter {
+                it.mealType == mealType &&
+                    !it.date.isBefore(fromDate) &&
+                    !it.date.isAfter(referenceDate)
             }
             .sortedByDescending { it.date }
             .map { it.food }
             .distinctBy { it.id }
-            .take(20)
+            .take(40)
             .toList()
-        if (foodsByMeal.isNotEmpty()) foodsByMeal else fallback
-    }
-
-    fun getRecentFoodsForMealType(mealType: MealType, date: LocalDate): Flow<List<Food>> =
-        diaryStore.allEntries().map { allEntries ->
-            val fromDate = date.minusDays(30)
-            allEntries
-                .asSequence()
-                .filter { it.mealType == mealType && !it.date.isBefore(fromDate) && !it.date.isAfter(date) }
-                .sortedByDescending { it.date }
-                .map { it.food }
-                .distinctBy { it.id }
-                .take(40)
-                .toList()
-        }
-
-    fun getRecentFoodsForMeal(
-        mealType: MealType,
-        referenceDate: LocalDate = LocalDate.now(),
-        lookbackDays: Long = 30
-    ): Flow<List<Food>> = diaryStore.allEntries().map { entries ->
-        val fromDate = referenceDate.minusDays(lookbackDays)
-        entries
-            .asSequence()
-            .filter { entry ->
-                entry.mealType == mealType &&
-                    !entry.date.isBefore(fromDate) &&
-                    !entry.date.isAfter(referenceDate)
-            }
-            .sortedByDescending { it.date }
-            .distinctBy { it.food.id }
-            .map { it.food }
-            .toList()
+        if (fromDiary.isNotEmpty()) fromDiary else fallback
     }
 
     fun getDiary(date: LocalDate): Flow<List<DiaryEntry>> = combine(

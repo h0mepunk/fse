@@ -21,6 +21,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -40,7 +42,6 @@ import com.example.fse.di.AppContainer
 import com.example.fse.domain.model.Food
 import com.example.fse.domain.model.MealType
 import com.example.fse.domain.model.Serving
-import com.example.fse.ui.AppDestination
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -49,16 +50,25 @@ import java.time.LocalDate
 @Composable
 fun SearchFoodScreen(
     container: AppContainer,
-    navController: NavController
+    navController: NavController,
+    initialMealType: MealType = MealType.Breakfast
 ) {
     var query by remember { mutableStateOf("") }
     var searchResult by remember { mutableStateOf<Result<List<Food>>?>(null) }
     var isSearching by remember { mutableStateOf(false) }
-    val recentFoods by container.foodRepository.getRecentFoods().collectAsState(initial = emptyList())
+    val recentFoods by container.foodRepository
+        .getRecentFoodsForMealType(initialMealType, LocalDate.now())
+        .collectAsState(initial = emptyList())
+    val snackbarHostState = remember { SnackbarHostState() }
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    val onAddCompleted: () -> Unit = {
+        container.foodRepository.forceDiaryRefresh()
+        navController.popBackStack()
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        SnackbarHost(hostState = snackbarHostState)
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -88,7 +98,9 @@ fun SearchFoodScreen(
                                 FoodSearchItem(
                                     food = food,
                                     container = container,
-                                    onSelect = { navController.navigate(AppDestination.Diary.route) }
+                                    onSelect = onAddCompleted,
+                                    snackbarHostState = snackbarHostState,
+                                    initialMealType = initialMealType
                                 )
                             }
                         }
@@ -105,7 +117,9 @@ fun SearchFoodScreen(
                             FoodSearchItem(
                                 food = food,
                                 container = container,
-                                onSelect = { navController.navigate(AppDestination.Diary.route) }
+                                onSelect = onAddCompleted,
+                                snackbarHostState = snackbarHostState,
+                                initialMealType = initialMealType
                             )
                         }
                     }
@@ -119,7 +133,9 @@ fun SearchFoodScreen(
 private fun FoodSearchItem(
     food: Food,
     container: AppContainer,
-    onSelect: () -> Unit
+    onSelect: () -> Unit,
+    snackbarHostState: SnackbarHostState,
+    initialMealType: MealType
 ) {
     var showServingPicker by remember { mutableStateOf(false) }
     var isFavorite by remember { mutableStateOf(false) }
@@ -172,32 +188,39 @@ private fun FoodSearchItem(
             food = food,
             onAdd = { serving, mult, mealType ->
                 scope.launch {
-                    kotlinx.coroutines.withContext(Dispatchers.IO) {
-                        val (finalFood, finalServing) = if (serving.calories == 0.0 && serving.protein == 0.0) {
-                            container.foodRepository.getFood(food.id).getOrNull()?.let { fullFood ->
-                                val match = fullFood.servings.find { it.id == serving.id }
-                                    ?: fullFood.servings.firstOrNull()
-                                if (match != null && (match.calories > 0 || match.protein > 0)) {
-                                    fullFood to match
-                                } else fullFood to serving
-                            } ?: (food to serving)
-                        } else food to serving
-                        container.foodRepository.addToDiary(
-                            com.example.fse.domain.model.DiaryEntry(
-                                id = "d_${System.currentTimeMillis()}_${finalFood.id}",
-                                date = LocalDate.now(),
-                                mealType = mealType,
-                                food = finalFood,
-                                serving = finalServing,
-                                multiplier = mult
+                    val result = runCatching {
+                        kotlinx.coroutines.withContext(Dispatchers.IO) {
+                            val (finalFood, finalServing) = if (serving.calories == 0.0 && serving.protein == 0.0) {
+                                container.foodRepository.getFood(food.id).getOrNull()?.let { fullFood ->
+                                    val match = fullFood.servings.find { it.id == serving.id }
+                                        ?: fullFood.servings.firstOrNull()
+                                    if (match != null && (match.calories > 0 || match.protein > 0)) {
+                                        fullFood to match
+                                    } else fullFood to serving
+                                } ?: (food to serving)
+                            } else food to serving
+                            container.foodRepository.addToDiary(
+                                com.example.fse.data.repository.FoodRepository.AddToDiaryRequest(
+                                    date = LocalDate.now(),
+                                    mealType = mealType,
+                                    food = finalFood,
+                                    serving = finalServing,
+                                    multiplier = mult
+                                )
                             )
-                        )
-                        container.foodRepository.addToRecent(finalFood)
+                        }
+                    }
+                    result.onSuccess {
+                        showServingPicker = false
+                        onSelect()
+                    }
+                    if (result.isFailure) {
+                        val error = result.exceptionOrNull()
+                        snackbarHostState.showSnackbar(error?.message ?: "Failed to add food")
                     }
                 }
-                showServingPicker = false
-                onSelect()
             },
+            initialMealType = initialMealType,
             onDismiss = { showServingPicker = false }
         )
     }
@@ -208,11 +231,12 @@ private fun ServingPickerBottomSheet(
     servings: List<Serving>,
     food: Food,
     onAdd: (Serving, Double, MealType) -> Unit,
+    initialMealType: MealType,
     onDismiss: () -> Unit
 ) {
     var selectedMult by remember { mutableStateOf(1.0) }
     var selectedServing by remember { mutableStateOf(servings.first()) }
-    var selectedMealType by remember { mutableStateOf(MealType.Breakfast) }
+    var selectedMealType by remember { mutableStateOf(initialMealType) }
 
     Column(modifier = Modifier.padding(16.dp)) {
         Text("Add to diary", style = MaterialTheme.typography.titleLarge)
