@@ -4,9 +4,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
@@ -14,7 +12,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -30,7 +27,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.fse.di.AppContainer
+import com.example.fse.domain.model.MealType
 import com.example.fse.ui.screens.DiaryScreen
 import com.example.fse.ui.screens.FavoritesScreen
 import com.example.fse.ui.screens.AuthScreen
@@ -52,6 +51,15 @@ enum class AppDestination(val route: String) {
     Auth("auth")
 }
 
+private fun parseMealType(value: String?): MealType? = when (value?.lowercase()) {
+    "breakfast" -> MealType.Breakfast
+    "lunch" -> MealType.Lunch
+    "dinner" -> MealType.Dinner
+    "snack" -> MealType.Snack
+    "other" -> MealType.Other
+    else -> null
+}
+
 @PreviewScreenSizes
 @Composable
 fun FSEApp(container: AppContainer?) {
@@ -63,15 +71,6 @@ fun FSEApp(container: AppContainer?) {
         if (container != null) {
             Scaffold(
                 contentWindowInsets = WindowInsets.safeDrawing,
-                floatingActionButton = {
-                    if (currentRoute == AppDestination.Diary.route) {
-                        FloatingActionButton(
-                            onClick = { navController.navigate(AppDestination.SearchFood.route) }
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "Add food")
-                        }
-                    }
-                },
                 bottomBar = {
                     val labelStyle = MaterialTheme.typography.labelSmall
                     NavigationBar {
@@ -130,8 +129,21 @@ fun FSEApp(container: AppContainer?) {
                         composable(AppDestination.Diary.route) {
                             DiaryScreen(container = container, navController = navController)
                         }
-                        composable(AppDestination.SearchFood.route) {
-                            SearchFoodScreen(container = container, navController = navController)
+                        composable(
+                            route = "${AppDestination.SearchFood.route}?mealType={mealType}",
+                            arguments = listOf(
+                                navArgument("mealType") {
+                                    defaultValue = "breakfast"
+                                    nullable = false
+                                }
+                            )
+                        ) { backStack ->
+                            SearchFoodScreen(
+                                container = container,
+                                navController = navController,
+                                initialMealType = parseMealType(backStack.arguments?.getString("mealType"))
+                                    ?: MealType.Breakfast
+                            )
                         }
                         composable(AppDestination.Cookbook.route) {
                             CookbookScreen(container = container)

@@ -25,4 +25,8 @@ class SearchCache<T>(private val ttlMs: Long = 5 * 60 * 1000) {
     suspend fun put(key: String, value: T) = mutex.withLock {
         cache[key] = Entry(value, System.currentTimeMillis() + ttlMs)
     }
+
+    suspend fun clear() = mutex.withLock {
+        cache.clear()
+    }
 }

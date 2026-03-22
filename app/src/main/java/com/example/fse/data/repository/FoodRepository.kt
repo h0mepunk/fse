@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -63,6 +64,12 @@ class FoodRepository(
     private val json = FatSecretClient.json
     private val diaryRefreshTrigger = MutableStateFlow(0)
 
+    private suspend fun mergeFoodsByPriority(
+        primary: List<Food>,
+        secondary: List<Food>,
+        limit: Int = 50
+    ): List<Food> = (primary + secondary).distinctBy { it.id }.take(limit)
+
     suspend fun searchFoods(query: String, page: Int = 0): Result<List<Food>> {
         val cacheKey = "${query.lowercase()}_$page"
         searchCache.get(cacheKey)?.let { return Result.success(it) }
@@ -99,6 +106,48 @@ class FoodRepository(
         }
     }
 
+    suspend fun searchFoodsWithDiaryPriority(
+        query: String,
+        referenceDate: LocalDate = LocalDate.now(),
+        diaryTopLimit: Int = 10
+    ): Result<List<Food>> {
+        val normalized = query.trim().lowercase()
+        if (normalized.isBlank()) return Result.success(emptyList())
+
+        val diaryMatches = diaryStore.allEntries().first()
+            .asSequence()
+            .filter { !it.date.isBefore(referenceDate.minusDays(30)) && !it.date.isAfter(referenceDate) }
+            .filter {
+                val name = it.food.name.lowercase()
+                val brand = it.food.brandName?.lowercase().orEmpty()
+                name.contains(normalized) || brand.contains(normalized)
+            }
+            .sortedWith(
+                compareBy<DiaryEntry> { entry ->
+                    val name = entry.food.name.lowercase()
+                    when {
+                        name.startsWith(normalized) -> 0
+                        name.contains(" $normalized") -> 1
+                        else -> 2
+                    }
+                }.thenByDescending { it.date }
+            )
+            .map { it.food }
+            .distinctBy { it.id }
+            .take(diaryTopLimit.coerceAtLeast(0))
+            .toList()
+
+        val remoteResult = searchFoods(query)
+        val remoteFoods = remoteResult.getOrNull().orEmpty()
+        val merged = (diaryMatches + remoteFoods).distinctBy { it.id }
+
+        return when {
+            merged.isNotEmpty() -> Result.success(merged)
+            remoteResult.isFailure -> Result.failure(remoteResult.exceptionOrNull() ?: Exception("Search failed"))
+            else -> Result.success(emptyList())
+        }
+    }
+
     suspend fun getFood(foodId: Long): Result<Food> {
         val api = getApi() ?: return Result.failure(Exception("Not authenticated"))
         return runCatching {
@@ -124,7 +173,8 @@ class FoodRepository(
                                 ?.foods?.foodList(json)?.map { it.toDomain() } ?: emptyList()
                         } ?: emptyList()
                     }
-                    emit(if (profile.isEmpty()) localFoods.map { it.toDomain() } else profile)
+                    val local = localFoods.map { it.toDomain() }
+                    emit(mergeFoodsByPriority(local, profile))
                 } else {
                     emit(localFoods.map { it.toDomain() })
                 }
@@ -133,6 +183,46 @@ class FoodRepository(
 
     suspend fun addToRecent(food: Food) {
         recentStore.add(StoredFood.from(food))
+        searchCache.clear()
+    }
+
+    suspend fun refreshDiaryHistoryFromFatSecret(daysBack: Int = 30) {
+        if (oauth1TokenStore.getTokens() == null) return
+        val profileApi = getProfileApi() ?: return
+        val today = LocalDate.now()
+        repeat(daysBack.coerceAtLeast(1)) { dayOffset ->
+            val date = today.minusDays(dayOffset.toLong())
+            val dateInt = ChronoUnit.DAYS.between(LocalDate.of(1970, 1, 1), date).toInt()
+            val response = runCatching { profileApi.getFoodEntries(dateInt) }.getOrNull() ?: return@repeat
+            if (!response.isSuccessful) return@repeat
+            val entries = response.body()
+                ?.food_entries
+                ?.entryList(json)
+                ?.map { it.toDiaryEntry() }
+                ?: emptyList()
+            entries.forEach { diaryStore.add(it) }
+        }
+        diaryRefreshTrigger.value++
+    }
+
+    fun getRecentFoodsForMealType(mealType: MealType, referenceDate: LocalDate): Flow<List<Food>> = combine(
+        diaryStore.allEntries(),
+        getRecentFoods()
+    ) { allEntries, fallback ->
+        val fromDate = referenceDate.minusDays(30)
+        val fromDiary = allEntries
+            .asSequence()
+            .filter {
+                it.mealType == mealType &&
+                    !it.date.isBefore(fromDate) &&
+                    !it.date.isAfter(referenceDate)
+            }
+            .sortedByDescending { it.date }
+            .map { it.food }
+            .distinctBy { it.id }
+            .take(40)
+            .toList()
+        if (fromDiary.isNotEmpty()) fromDiary else fallback
     }
 
     fun getRecentFoodsForMeal(
@@ -335,7 +425,11 @@ class FoodRepository(
      * Adds all items of a saved meal to today's diary.
      * Fetches full food details for each item to get nutrition.
      */
-    suspend fun addSavedMealToDiary(meal: SavedMeal): Result<Unit> {
+    suspend fun addSavedMealToDiary(
+        meal: SavedMeal,
+        mealType: MealType = MealType.Other,
+        quantityMultiplier: Double = 1.0
+    ): Result<Unit> {
         val date = LocalDate.now()
         return runCatching {
             meal.items.forEach { item ->
@@ -347,10 +441,10 @@ class FoodRepository(
                 addToDiary(
                     AddToDiaryRequest(
                         date = date,
-                        mealType = MealType.Other,
+                        mealType = mealType,
                         food = food,
                         serving = serving,
-                        multiplier = item.numberOfUnits
+                        multiplier = item.numberOfUnits * quantityMultiplier
                     )
                 )
             }
