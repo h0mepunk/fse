@@ -53,7 +53,7 @@ fun MealsScreen(container: AppContainer, navController: androidx.navigation.NavC
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         SnackbarHost(hostState = snackbarHostState)
         Text(
-            "Приёмы пищи",
+            "Meals",
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(bottom = 16.dp)
         )
@@ -63,7 +63,7 @@ fun MealsScreen(container: AppContainer, navController: androidx.navigation.NavC
         }
         if (meals.isEmpty()) {
             Text(
-                "Подключите FatSecret в разделе Account, чтобы загрузить сохранённые приёмы пищи.",
+                "Connect FatSecret in Account to load your saved meals.",
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(8.dp)
             )
@@ -100,7 +100,7 @@ fun MealsScreen(container: AppContainer, navController: androidx.navigation.NavC
                     errorMessage = null
                     val value = quantityInput.toDoubleOrNull()
                     if (value == null || value <= 0.0) {
-                        errorMessage = "Введите корректное количество"
+                        errorMessage = "Enter a valid amount"
                         return@launch
                     }
                     val multiplier = if (selectedQuantityMode == QuantityMode.Weight) value / 100.0 else value
@@ -114,7 +114,7 @@ fun MealsScreen(container: AppContainer, navController: androidx.navigation.NavC
                     result.onSuccess {
                         selectedMeal = null
                         container.foodRepository.forceDiaryRefresh()
-                        snackbarHostState.showSnackbar("Добавлено")
+                        snackbarHostState.showSnackbar("Added")
                         navController.navigate(AppDestination.Diary.route)
                     }.onFailure { errorMessage = it.message }
                 }
@@ -152,7 +152,7 @@ private fun SavedMealCard(meal: SavedMeal, onAdd: () -> Unit) {
             }
             if (meal.items.isNotEmpty()) {
                 Text(
-                    "${meal.items.size} продуктов",
+                    "${meal.items.size} items",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 8.dp)
                 )
@@ -165,7 +165,7 @@ private fun SavedMealCard(meal: SavedMeal, onAdd: () -> Unit) {
                 }
                 if (meal.items.size > 3) {
                     Text(
-                        "  ...и ещё ${meal.items.size - 3}",
+                        "  ...and ${meal.items.size - 3} more",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 2.dp)
                     )
@@ -175,15 +175,15 @@ private fun SavedMealCard(meal: SavedMeal, onAdd: () -> Unit) {
                 onClick = onAdd,
                 modifier = Modifier.padding(top = 12.dp)
             ) {
-                Text("Добавить")
+                Text("Add")
             }
         }
     }
 }
 
 private enum class QuantityMode(val title: String) {
-    Weight("Вес, г"),
-    Portions("Порции")
+    Weight("Weight, g"),
+    Portions("Portions")
 }
 
 @Composable
@@ -200,10 +200,10 @@ private fun MealAddDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Добавить ${meal.name}") },
+        title = { Text("Add ${meal.name}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Количество")
+                Text("Amount")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     QuantityMode.entries.forEach { mode ->
                         FilterChip(
@@ -216,11 +216,11 @@ private fun MealAddDialog(
                 OutlinedTextField(
                     value = quantityInput,
                     onValueChange = onQuantityInputChange,
-                    label = { Text(if (quantityMode == QuantityMode.Weight) "Вес (г)" else "Порции") },
+                    label = { Text(if (quantityMode == QuantityMode.Weight) "Weight (g)" else "Portions") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("Прием пищи")
+                Text("Meal type")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(MealType.Breakfast, MealType.Lunch, MealType.Dinner, MealType.Snack).forEach { mt ->
                         FilterChip(
@@ -233,10 +233,10 @@ private fun MealAddDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text("Добавить") }
+            TextButton(onClick = onConfirm) { Text("Add") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
 }

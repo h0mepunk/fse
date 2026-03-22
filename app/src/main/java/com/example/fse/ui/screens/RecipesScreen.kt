@@ -42,28 +42,28 @@ fun CookbookScreen(container: AppContainer) {
             value = query,
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Поиск по моим рецептам") },
+            label = { Text("Search my recipes") },
             singleLine = true
         )
 
         when {
             !hasOAuth -> Text(
-                "Подключите FatSecret в Account, чтобы видеть свои рецепты",
+                "Connect FatSecret in Account to see your recipes",
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(8.dp)
             )
             myRecipes.isEmpty() -> Text(
-                "У вас пока нет сохраненных рецептов в FatSecret",
+                "You don't have saved recipes in FatSecret yet",
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(8.dp)
             )
             displayRecipes.isEmpty() -> Text(
-                "По запросу \"$query\" среди ваших рецептов ничего не найдено",
+                "No results for \"$query\" in your recipes",
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(8.dp)
             )
             else -> {
-                Text("Мои рецепты", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
+                Text("My recipes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
