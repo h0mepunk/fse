@@ -1,6 +1,7 @@
 package com.example.fse.data.api
 
 import retrofit2.Response
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Query
@@ -15,6 +16,23 @@ interface FatSecretProfileApi {
         @Query("date") dateInt: Int,
         @Query("format") format: String = "json"
     ): Response<FatSecretProfileDto.FoodEntriesWrapper>
+
+    @POST("rest/food-entries/v1")
+    suspend fun createFoodEntry(
+        @Query("food_id") foodId: Long,
+        @Query("food_entry_name") foodEntryName: String,
+        @Query("serving_id") servingId: Long,
+        @Query("number_of_units") numberOfUnits: Double,
+        @Query("meal") meal: String,
+        @Query("date") dateInt: Int,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretProfileDto.FoodEntriesWrapper>
+
+    @DELETE("rest/food-entries/v1")
+    suspend fun deleteFoodEntry(
+        @Query("food_entry_id") foodEntryId: String,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretProfileDto.SuccessResponse>
 
     @GET("rest/food/favorites/v2")
     suspend fun getFavorites(
