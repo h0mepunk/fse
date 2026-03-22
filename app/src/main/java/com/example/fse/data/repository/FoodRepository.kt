@@ -12,6 +12,7 @@ import com.example.fse.data.local.LocalFavoritesStore
 import com.example.fse.data.local.LocalRecentFoodStore
 import com.example.fse.data.local.StoredFood
 import com.example.fse.domain.model.Food
+import com.example.fse.domain.model.Recipe
 import com.example.fse.domain.model.SavedMeal
 import com.example.fse.domain.model.Serving
 import com.example.fse.domain.model.DiaryEntry
@@ -328,7 +329,9 @@ class FoodRepository(
     }
 
     suspend fun addToDiary(request: AddToDiaryRequest): DiaryEntry {
-        val createdEntry = if (oauth1TokenStore.getTokens() != null) {
+        val canSyncToFatSecret =
+            oauth1TokenStore.getTokens() != null && request.food.id > 0 && request.serving.id > 0
+        val createdEntry = if (canSyncToFatSecret) {
             val profileApi = getProfileApi() ?: throw Exception("Not authenticated")
             createRemoteFoodEntry(profileApi, request)
         } else {
@@ -345,6 +348,94 @@ class FoodRepository(
         addToRecent(createdEntry.food)
         diaryRefreshTrigger.value++
         return createdEntry
+    }
+
+    suspend fun addCustomFoodToDiary(
+        name: String,
+        grams: Double,
+        caloriesPer100g: Double,
+        proteinPer100g: Double,
+        carbsPer100g: Double,
+        fatPer100g: Double,
+        mealType: MealType = MealType.Other,
+        date: LocalDate = LocalDate.now()
+    ): Result<DiaryEntry> = runCatching {
+        val safeGrams = grams.coerceAtLeast(1.0)
+        val uniqueId = -System.nanoTime()
+        val serving = Serving(
+            id = uniqueId,
+            description = "100 g",
+            calories = caloriesPer100g.coerceAtLeast(0.0),
+            protein = proteinPer100g.coerceAtLeast(0.0),
+            carbs = carbsPer100g.coerceAtLeast(0.0),
+            fat = fatPer100g.coerceAtLeast(0.0),
+            fiber = 0.0,
+            sodium = 0.0,
+            calcium = 0.0,
+            iron = 0.0,
+            vitaminA = 0.0,
+            vitaminC = 0.0,
+            vitaminD = 0.0,
+            potassium = 0.0
+        )
+        val food = Food(
+            id = uniqueId,
+            name = name.ifBlank { "Custom food" },
+            brandName = null,
+            foodType = "Custom",
+            servings = listOf(serving)
+        )
+        addToDiary(
+            AddToDiaryRequest(
+                date = date,
+                mealType = mealType,
+                food = food,
+                serving = serving,
+                multiplier = safeGrams / 100.0
+            )
+        )
+    }
+
+    suspend fun addRecipeToDiary(
+        recipe: Recipe,
+        grams: Double,
+        mealType: MealType = MealType.Other,
+        date: LocalDate = LocalDate.now()
+    ): Result<DiaryEntry> = runCatching {
+        val safeGrams = grams.coerceAtLeast(1.0)
+        val uniqueId = -System.nanoTime()
+        val serving = Serving(
+            id = uniqueId,
+            description = "100 g recipe",
+            calories = recipe.calories.coerceAtLeast(0.0),
+            protein = recipe.protein.coerceAtLeast(0.0),
+            carbs = recipe.carbs.coerceAtLeast(0.0),
+            fat = recipe.fat.coerceAtLeast(0.0),
+            fiber = 0.0,
+            sodium = 0.0,
+            calcium = 0.0,
+            iron = 0.0,
+            vitaminA = 0.0,
+            vitaminC = 0.0,
+            vitaminD = 0.0,
+            potassium = 0.0
+        )
+        val food = Food(
+            id = uniqueId,
+            name = recipe.name,
+            brandName = "Recipe",
+            foodType = "Recipe",
+            servings = listOf(serving)
+        )
+        addToDiary(
+            AddToDiaryRequest(
+                date = date,
+                mealType = mealType,
+                food = food,
+                serving = serving,
+                multiplier = safeGrams / 100.0
+            )
+        )
     }
 
     suspend fun removeFromDiary(entryId: String) {

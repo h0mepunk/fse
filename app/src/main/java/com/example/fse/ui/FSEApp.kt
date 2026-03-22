@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material3.Icon
@@ -45,7 +46,6 @@ enum class AppDestination(val route: String) {
     SearchFood("search_food"),
     Cookbook("cookbook"),
     Meals("meals"),
-    Favorites("favorites"),
     Norms("norms"),
     NormsEdit("norms_edit"),
     Auth("auth")
@@ -99,12 +99,6 @@ fun FSEApp(container: AppContainer?) {
                             onClick = { navController.navigate(AppDestination.Meals.route) }
                         )
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.Favorite, contentDescription = null) },
-                            label = { Text("Fav", style = labelStyle) },
-                            selected = currentRoute == AppDestination.Favorites.route,
-                            onClick = { navController.navigate(AppDestination.Favorites.route) }
-                        )
-                        NavigationBarItem(
                             icon = { Icon(Icons.Default.Info, contentDescription = null) },
                             label = { Text("Norms", style = labelStyle) },
                             selected = currentRoute == AppDestination.Norms.route,
@@ -150,9 +144,6 @@ fun FSEApp(container: AppContainer?) {
                         }
                         composable(AppDestination.Meals.route) {
                             MealsScreen(container = container, navController = navController)
-                        }
-                        composable(AppDestination.Favorites.route) {
-                            FavoritesScreen(container = container, navController = navController)
                         }
                     composable(AppDestination.Norms.route) {
                         NormsScreen(container = container, navController = navController)
