@@ -12,8 +12,10 @@ import com.example.fse.data.local.RoomRecipeStore
 import com.example.fse.data.local.RoomRecentFoodStore
 import com.example.fse.data.local.db.createAppDatabase
 import com.example.fse.data.repository.FoodRepository
-import com.example.fse.data.repository.MealsRepository
 import com.example.fse.data.repository.RecipeRepository
+import com.example.fse.data.repository.SavedMealTemplateRepository
+import com.example.fse.data.repository.SavedMealsRepository
+import com.example.fse.data.repository.UserProfileRepository
 
 class FSEApplication : Application() {
 
@@ -68,7 +70,22 @@ class FSEApplication : Application() {
         )
     }
 
-    val mealsRepository by lazy {
-        MealsRepository(oauth1TokenStore = oauth1TokenStore)
+    val savedMealsRepository by lazy {
+        SavedMealsRepository(oauth1TokenStore = oauth1TokenStore)
+    }
+
+    val savedMealTemplateRepository by lazy {
+        SavedMealTemplateRepository(
+            dao = db.savedMealTemplateDao(),
+            foodRepository = foodRepository
+        )
+    }
+
+    val userProfileRepository by lazy {
+        UserProfileRepository(
+            userProfileDao = db.userProfileDao(),
+            periodStartDao = db.periodStartDao(),
+            normsStore = normsStore
+        )
     }
 }

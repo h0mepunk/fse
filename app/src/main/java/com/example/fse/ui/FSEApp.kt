@@ -6,15 +6,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -25,31 +21,46 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewScreenSizes
-import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import java.time.LocalDate
 import com.example.fse.di.AppContainer
+import com.example.fse.domain.model.MealType
 import com.example.fse.ui.screens.DiaryScreen
 import com.example.fse.ui.screens.FavoritesScreen
 import com.example.fse.ui.screens.AuthScreen
-import com.example.fse.ui.screens.MealsScreen
+import com.example.fse.ui.screens.CookbookTemplatesScreen
+import com.example.fse.ui.screens.MealsTabScreen
 import com.example.fse.ui.screens.NormsEditScreen
-import com.example.fse.ui.screens.NormsScreen
-import com.example.fse.ui.screens.CookbookScreen
 import com.example.fse.ui.screens.SearchFoodScreen
 import com.example.fse.ui.theme.FSETheme
 
 enum class AppDestination(val route: String) {
     Diary("diary"),
-    SearchFood("search_food"),
+    SearchFood("search_food/{diaryDate}"),
+    SearchFoodTemplate("search_food_template/{templateId}"),
+    SearchFoodSavedMeal("search_food_saved_meal/{savedMealId}"),
     Cookbook("cookbook"),
     Meals("meals"),
     Favorites("favorites"),
-    Norms("norms"),
     NormsEdit("norms_edit"),
-    Auth("auth")
+    Auth("auth");
+
+    companion object {
+        /** Concrete path for [androidx.navigation.NavController.navigate]. */
+        fun searchFoodPath(date: LocalDate) = "search_food/$date"
+
+        /** Opens food search with the serving picker defaulting to this meal type. */
+        fun searchFoodPath(date: LocalDate, mealType: MealType) = "search_food/$date/${mealType.name}"
+
+        fun searchFoodTemplatePath(templateId: Long) = "search_food_template/$templateId"
+
+        fun searchFoodSavedMealPath(savedMealId: String) = "search_food_saved_meal/$savedMealId"
+    }
 }
 
 @PreviewScreenSizes
@@ -63,15 +74,6 @@ fun FSEApp(container: AppContainer?) {
         if (container != null) {
             Scaffold(
                 contentWindowInsets = WindowInsets.safeDrawing,
-                floatingActionButton = {
-                    if (currentRoute == AppDestination.Diary.route) {
-                        FloatingActionButton(
-                            onClick = { navController.navigate(AppDestination.SearchFood.route) }
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "Add food")
-                        }
-                    }
-                },
                 bottomBar = {
                     val labelStyle = MaterialTheme.typography.labelSmall
                     NavigationBar {
@@ -82,19 +84,13 @@ fun FSEApp(container: AppContainer?) {
                             onClick = { navController.navigate(AppDestination.Diary.route) }
                         )
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                            label = { Text("Search", style = labelStyle) },
-                            selected = currentRoute == AppDestination.SearchFood.route,
-                            onClick = { navController.navigate(AppDestination.SearchFood.route) }
-                        )
-                        NavigationBarItem(
-                            icon = { Icon(Icons.Default.List, contentDescription = null) },
+                            icon = { Icon(Icons.Default.Restaurant, contentDescription = null) },
                             label = { Text("Cookbook", style = labelStyle) },
                             selected = currentRoute == AppDestination.Cookbook.route,
                             onClick = { navController.navigate(AppDestination.Cookbook.route) }
                         )
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.Restaurant, contentDescription = null) },
+                            icon = { Icon(Icons.Default.List, contentDescription = null) },
                             label = { Text("Meals", style = labelStyle) },
                             selected = currentRoute == AppDestination.Meals.route,
                             onClick = { navController.navigate(AppDestination.Meals.route) }
@@ -104,12 +100,6 @@ fun FSEApp(container: AppContainer?) {
                             label = { Text("Fav", style = labelStyle) },
                             selected = currentRoute == AppDestination.Favorites.route,
                             onClick = { navController.navigate(AppDestination.Favorites.route) }
-                        )
-                        NavigationBarItem(
-                            icon = { Icon(Icons.Default.Info, contentDescription = null) },
-                            label = { Text("Norms", style = labelStyle) },
-                            selected = currentRoute == AppDestination.Norms.route,
-                            onClick = { navController.navigate(AppDestination.Norms.route) }
                         )
                         NavigationBarItem(
                             icon = { Icon(Icons.Default.AccountCircle, contentDescription = null) },
@@ -130,21 +120,80 @@ fun FSEApp(container: AppContainer?) {
                         composable(AppDestination.Diary.route) {
                             DiaryScreen(container = container, navController = navController)
                         }
-                        composable(AppDestination.SearchFood.route) {
-                            SearchFoodScreen(container = container, navController = navController)
+                        composable(
+                            route = "search_food/{diaryDate}/{mealType}",
+                            arguments = listOf(
+                                navArgument("diaryDate") { type = NavType.StringType },
+                                navArgument("mealType") { type = NavType.StringType }
+                            )
+                        ) { entry ->
+                            val raw = entry.arguments?.getString("diaryDate")
+                            val diaryDate = raw?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                                ?: LocalDate.now()
+                            val mealName = entry.arguments?.getString("mealType")
+                            val presetMealType = mealName?.let { runCatching { MealType.valueOf(it) }.getOrNull() }
+                            SearchFoodScreen(
+                                container = container,
+                                navController = navController,
+                                diaryDate = diaryDate,
+                                templateId = null,
+                                presetMealType = presetMealType
+                            )
+                        }
+                        composable(
+                            route = AppDestination.SearchFood.route,
+                            arguments = listOf(
+                                navArgument("diaryDate") { type = NavType.StringType }
+                            )
+                        ) { entry ->
+                            val raw = entry.arguments?.getString("diaryDate")
+                            val diaryDate = raw?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                                ?: LocalDate.now()
+                            SearchFoodScreen(
+                                container = container,
+                                navController = navController,
+                                diaryDate = diaryDate,
+                                templateId = null,
+                                presetMealType = null
+                            )
+                        }
+                        composable(
+                            route = AppDestination.SearchFoodTemplate.route,
+                            arguments = listOf(
+                                navArgument("templateId") { type = NavType.LongType }
+                            )
+                        ) { entry ->
+                            val templateId = entry.arguments?.getLong("templateId") ?: return@composable
+                            SearchFoodScreen(
+                                container = container,
+                                navController = navController,
+                                diaryDate = LocalDate.now(),
+                                templateId = templateId
+                            )
+                        }
+                        composable(
+                            route = AppDestination.SearchFoodSavedMeal.route,
+                            arguments = listOf(
+                                navArgument("savedMealId") { type = NavType.StringType }
+                            )
+                        ) { entry ->
+                            val savedMealId = entry.arguments?.getString("savedMealId") ?: return@composable
+                            SearchFoodScreen(
+                                container = container,
+                                navController = navController,
+                                diaryDate = LocalDate.now(),
+                                savedMealId = savedMealId
+                            )
                         }
                         composable(AppDestination.Cookbook.route) {
-                            CookbookScreen(container = container)
+                            CookbookTemplatesScreen(container = container, navController = navController)
                         }
                         composable(AppDestination.Meals.route) {
-                            MealsScreen(container = container, navController = navController)
+                            MealsTabScreen(container = container, navController = navController)
                         }
                         composable(AppDestination.Favorites.route) {
                             FavoritesScreen(container = container, navController = navController)
                         }
-                    composable(AppDestination.Norms.route) {
-                        NormsScreen(container = container, navController = navController)
-                    }
                     composable(AppDestination.NormsEdit.route) {
                         NormsEditScreen(container = container, navController = navController)
                     }

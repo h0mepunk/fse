@@ -21,6 +21,7 @@ import androidx.navigation.NavController
 import com.example.fse.di.AppContainer
 import com.example.fse.domain.model.Food
 import com.example.fse.ui.AppDestination
+import java.time.LocalDate
 
 @Composable
 fun FavoritesScreen(
@@ -42,7 +43,7 @@ fun FavoritesScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { navController.navigate(AppDestination.SearchFood.route) }
+                            .clickable { navController.navigate(AppDestination.searchFoodPath(LocalDate.now())) }
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(food.name, style = MaterialTheme.typography.titleMedium)

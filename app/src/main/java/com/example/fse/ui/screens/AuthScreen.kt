@@ -54,9 +54,17 @@ fun AuthScreen(container: AppContainer, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "FatSecret Account",
+            text = "Аккаунт",
             style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 24.dp)
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        AccountProfileSection(container = container, modifier = Modifier.padding(bottom = 24.dp))
+
+        Text(
+            text = "FatSecret",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(bottom = 12.dp)
         )
 
         if (hasTokens) {

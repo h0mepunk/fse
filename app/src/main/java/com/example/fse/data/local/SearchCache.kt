@@ -8,7 +8,7 @@ import kotlinx.coroutines.sync.withLock
  * In-memory cache for API responses. TTL = 5 minutes.
  */
 class SearchCache<T>(private val ttlMs: Long = 5 * 60 * 1000) {
-    private data class Entry<U>(val data: U, val expiresAt: Long)
+    data class Entry<U>(val data: U, val expiresAt: Long)
 
     private val cache = mutableMapOf<String, Entry<T>>()
     private val mutex = Mutex()
@@ -24,5 +24,13 @@ class SearchCache<T>(private val ttlMs: Long = 5 * 60 * 1000) {
 
     suspend fun put(key: String, value: T) = mutex.withLock {
         cache[key] = Entry(value, System.currentTimeMillis() + ttlMs)
+    }
+
+    suspend fun remove(key: String) = mutex.withLock {
+        cache.remove(key)
+    }
+
+    suspend fun clearAll() = mutex.withLock {
+        cache.clear()
     }
 }

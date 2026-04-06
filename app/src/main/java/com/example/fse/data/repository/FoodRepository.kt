@@ -10,26 +10,35 @@ import com.example.fse.data.api.toDomain
 import com.example.fse.data.local.LocalDiaryStore
 import com.example.fse.data.local.LocalFavoritesStore
 import com.example.fse.data.local.LocalRecentFoodStore
+import com.example.fse.data.local.SearchCache
 import com.example.fse.data.local.StoredFood
 import com.example.fse.domain.model.Food
-import com.example.fse.domain.model.SavedMeal
 import com.example.fse.domain.model.Serving
 import com.example.fse.domain.model.DiaryEntry
 import com.example.fse.domain.model.MealType
 import com.example.fse.domain.model.Nutrient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FoodRepository(
@@ -62,6 +71,56 @@ class FoodRepository(
 
     private val json = FatSecretClient.json
     private val diaryRefreshTrigger = MutableStateFlow(0)
+
+    /** Кэш ответа FatSecret food_entries по дате (только удалённые записи); показываем сразу, обновляем в фоне. */
+    private val diaryRemoteCache = SearchCache<List<DiaryEntry>>(ttlMs = 24 * 60 * 60 * 1000L)
+
+    private val _diarySyncError = MutableSharedFlow<String>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val diarySyncErrors: SharedFlow<String> = _diarySyncError.asSharedFlow()
+
+    private fun mergeDiaryWithRemote(local: List<DiaryEntry>, remote: List<DiaryEntry>): List<DiaryEntry> {
+        val localIds = local.map { it.id }.toSet()
+        return (local + remote.filter { it.id !in localIds })
+            .sortedWith(compareBy({ it.mealType.ordinal }, { it.id }))
+    }
+
+    private suspend fun clearDiaryRemoteCache() {
+        diaryRemoteCache.clearAll()
+    }
+
+    private val favoritesRemoteCache = SearchCache<List<Food>>(ttlMs = 24 * 60 * 60 * 1000L)
+    private val favoritesCacheKey = "profile_food_favorites"
+    private val favoritesRefreshTrigger = MutableStateFlow(0)
+    private val skipNextFavoritesBackgroundFetch = AtomicBoolean(false)
+    private val _favoritesRefreshing = MutableStateFlow(false)
+    val favoritesRefreshing: StateFlow<Boolean> = _favoritesRefreshing.asStateFlow()
+
+    fun triggerFavoritesRefresh() {
+        favoritesRefreshTrigger.value++
+    }
+
+    suspend fun refreshFavoritesAndAwait() {
+        if (oauth1TokenStore.getTokens() == null) return
+        withContext(Dispatchers.IO) {
+            _favoritesRefreshing.value = true
+            try {
+                val api = getProfileApi() ?: return@withContext
+                val response = runCatching { api.getFavorites() }.getOrNull() ?: return@withContext
+                if (!response.isSuccessful) return@withContext
+                val foods = response.body()?.foods?.foodList(json)?.map { it.toDomain() } ?: emptyList()
+                if (foods.isNotEmpty()) {
+                    favoritesRemoteCache.put(favoritesCacheKey, foods)
+                }
+                skipNextFavoritesBackgroundFetch.set(true)
+                favoritesRefreshTrigger.value++
+            } finally {
+                _favoritesRefreshing.value = false
+            }
+        }
+    }
 
     suspend fun searchFoods(query: String, page: Int = 0): Result<List<Food>> {
         val cacheKey = "${query.lowercase()}_$page"
@@ -111,6 +170,21 @@ class FoodRepository(
         }
     }
 
+    /**
+     * Recently-eaten / profile stubs have serving id but no macros; load full food and prefer last-used serving.
+     */
+    private suspend fun enrichProfileStubFood(food: Food): Food {
+        val stubServingId = food.servings.firstOrNull()?.id ?: 0L
+        val needsEnrichment = food.servings.isEmpty() || food.servings.all { s ->
+            s.calories == 0.0 && s.protein == 0.0 && s.carbs == 0.0 && s.fat == 0.0
+        }
+        if (!needsEnrichment) return food
+        val detailed = getFood(food.id).getOrNull() ?: return food
+        if (stubServingId <= 0L) return detailed
+        val preferred = detailed.servings.find { it.id == stubServingId } ?: return detailed
+        return detailed.copy(servings = listOf(preferred) + detailed.servings.filter { it.id != stubServingId })
+    }
+
     fun getRecentFoods(): Flow<List<Food>> = combine(
         oauth1TokenStore.hasTokens,
         recentStore.foods
@@ -118,11 +192,22 @@ class FoodRepository(
         .flatMapLatest { (hasOAuth1, localFoods) ->
             flow {
                 if (hasOAuth1) {
-                    val profile = withContext(Dispatchers.IO) {
+                    val raw = withContext(Dispatchers.IO) {
                         getProfileApi()?.let { api ->
                             runCatching { api.getRecentlyEaten() }.getOrNull()?.body()
                                 ?.foods?.foodList(json)?.map { it.toDomain() } ?: emptyList()
                         } ?: emptyList()
+                    }
+                    val profile = if (raw.isEmpty()) {
+                        emptyList()
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            coroutineScope {
+                                raw.map { food ->
+                                    async { enrichProfileStubFood(food) }
+                                }.awaitAll()
+                            }
+                        }
                     }
                     emit(if (profile.isEmpty()) localFoods.map { it.toDomain() } else profile)
                 } else {
@@ -172,24 +257,24 @@ class FoodRepository(
                 .toList()
         }
 
-    fun getRecentFoodsForMeal(
-        mealType: MealType,
-        referenceDate: LocalDate = LocalDate.now(),
-        lookbackDays: Long = 30
-    ): Flow<List<Food>> = diaryStore.allEntries().map { entries ->
-        val fromDate = referenceDate.minusDays(lookbackDays)
-        entries
-            .asSequence()
-            .filter { entry ->
-                entry.mealType == mealType &&
-                    !entry.date.isBefore(fromDate) &&
-                    !entry.date.isAfter(referenceDate)
-            }
-            .sortedByDescending { it.date }
-            .distinctBy { it.food.id }
-            .map { it.food }
-            .toList()
-    }
+//    fun getRecentFoodsForMeal(
+//        mealType: MealType,
+//        referenceDate: LocalDate = LocalDate.now(),
+//        lookbackDays: Long = 30
+//    ): Flow<List<Food>> = diaryStore.allEntries().map { entries ->
+//        val fromDate = referenceDate.minusDays(lookbackDays)
+//        entries
+//            .asSequence()
+//            .filter { entry ->
+//                entry.mealType == mealType &&
+//                    !entry.date.isBefore(fromDate) &&
+//                    !entry.date.isAfter(referenceDate)
+//            }
+//            .sortedByDescending { it.date }
+//            .distinctBy { it.food.id }
+//            .map { it.food }
+//            .toList()
+//    }
 
     fun getDiary(date: LocalDate): Flow<List<DiaryEntry>> = combine(
         oauth1TokenStore.hasTokens,
@@ -197,20 +282,32 @@ class FoodRepository(
         diaryRefreshTrigger
     ) { hasOAuth1, localEntries, _ -> Pair(hasOAuth1, localEntries) }
         .flatMapLatest { (hasOAuth1, localEntries) ->
-            flow {
-                if (hasOAuth1) {
-                    val dateInt = ChronoUnit.DAYS.between(LocalDate.of(1970, 1, 1), date).toInt()
-                    val profile = withContext(Dispatchers.IO) {
-                        getProfileApi()?.let { api ->
-                            runCatching { api.getFoodEntries(dateInt) }.getOrNull()?.body()
-                                ?.food_entries?.entryList(json)?.map { it.toDiaryEntry() } ?: emptyList()
-                        } ?: emptyList()
+            channelFlow {
+                if (!hasOAuth1) {
+                    send(localEntries)
+                    return@channelFlow
+                }
+                val cacheKey = date.toString()
+                val cachedRemote = diaryRemoteCache.get(cacheKey) ?: emptyList()
+                send(mergeDiaryWithRemote(localEntries, cachedRemote))
+
+                launch(Dispatchers.IO) {
+                    runCatching {
+                        val api = getProfileApi() ?: throw Exception("Профиль FatSecret недоступен")
+                        val dateInt = ChronoUnit.DAYS.between(LocalDate.of(1970, 1, 1), date).toInt()
+                        val response = api.getFoodEntries(dateInt)
+                        if (!response.isSuccessful) {
+                            throw Exception("Дневник: ошибка сети ${response.code()}")
+                        }
+                        val wrapper = response.body() ?: throw Exception("Пустой ответ сервера")
+                        val remote = wrapper.food_entries?.entryList(json)?.map { it.toDiaryEntry() } ?: emptyList()
+                        diaryRemoteCache.put(cacheKey, remote)
+                        mergeDiaryWithRemote(localEntries, remote)
+                    }.onSuccess { merged ->
+                        send(merged)
+                    }.onFailure { e ->
+                        _diarySyncError.tryEmit(e.message ?: "Не удалось обновить дневник")
                     }
-                    val localIds = localEntries.map { it.id }.toSet()
-                    val merged = localEntries + profile.filter { it.id !in localIds }
-                    emit(merged.sortedWith(compareBy({ it.mealType.ordinal }, { it.id })))
-                } else {
-                    emit(localEntries)
                 }
             }
         }
@@ -309,8 +406,40 @@ class FoodRepository(
         }
         diaryStore.add(createdEntry)
         addToRecent(createdEntry.food)
+        clearDiaryRemoteCache()
         diaryRefreshTrigger.value++
         return createdEntry
+    }
+
+    /**
+     * Copies all foods from a FatSecret saved meal into the diary for [date] (Profile: food_entries.copy_saved_meal).
+     * Snack maps to API meal type "other".
+     */
+    suspend fun copySavedMealToDiary(
+        savedMealId: Long,
+        mealType: MealType,
+        date: LocalDate = LocalDate.now()
+    ) {
+        val profileApi = getProfileApi() ?: throw Exception("Connect FatSecret in Account")
+        val meal = when (mealType) {
+            MealType.Breakfast -> "breakfast"
+            MealType.Lunch -> "lunch"
+            MealType.Dinner -> "dinner"
+            MealType.Snack, MealType.Other -> "other"
+        }
+        val dateInt = ChronoUnit.DAYS.between(LocalDate.of(1970, 1, 1), date).toInt()
+        val response = profileApi.copySavedMealToDiary(
+            savedMealId = savedMealId,
+            meal = meal,
+            dateInt = dateInt
+        )
+        if (!response.isSuccessful) {
+            throw Exception("Не удалось добавить приём: ${response.code()}")
+        }
+        val ok = response.body()?.success?.value == "1"
+        if (!ok) throw Exception("Не удалось добавить приём")
+        clearDiaryRemoteCache()
+        diaryRefreshTrigger.value++
     }
 
     suspend fun removeFromDiary(entryId: String) {
@@ -324,65 +453,75 @@ class FoodRepository(
             if (!ok) throw Exception("Delete food entry failed")
         }
         diaryStore.remove(entryId)
+        clearDiaryRemoteCache()
+        diaryRefreshTrigger.value++
+    }
+
+    suspend fun updateDiaryEntryPortion(entry: DiaryEntry, serving: Serving, multiplier: Double) {
+        val updated = entry.copy(serving = serving, multiplier = multiplier)
+        if (oauth1TokenStore.getTokens() != null && entry.id.all { it.isDigit() }) {
+            val profileApi = getProfileApi() ?: throw Exception("Not authenticated")
+            val servingIdParam = serving.id.takeIf { it != entry.serving.id }
+            val response = profileApi.editFoodEntry(
+                foodEntryId = entry.id.toLong(),
+                numberOfUnits = multiplier,
+                servingId = servingIdParam
+            )
+            if (!response.isSuccessful) {
+                throw Exception("Изменить запись не удалось: ${response.code()}")
+            }
+            val ok = response.body()?.success?.value == "1"
+            if (!ok) throw Exception("Изменить запись не удалось")
+        }
+        diaryStore.updatePortion(updated)
+        clearDiaryRemoteCache()
         diaryRefreshTrigger.value++
     }
 
     fun forceDiaryRefresh() {
+        // Оставляем кэш: при ручном обновлении сначала покажем закэшированный merged, затем фон
         diaryRefreshTrigger.value++
-    }
-
-    /**
-     * Adds all items of a saved meal to today's diary.
-     * Fetches full food details for each item to get nutrition.
-     */
-    suspend fun addSavedMealToDiary(meal: SavedMeal): Result<Unit> {
-        val date = LocalDate.now()
-        return runCatching {
-            meal.items.forEach { item ->
-                val foodResult = getFood(item.foodId)
-                val food = foodResult.getOrThrow()
-                val serving = food.servings.find { it.id == item.servingId }
-                    ?: food.servings.firstOrNull()
-                    ?: throw Exception("No serving for ${item.name}")
-                addToDiary(
-                    AddToDiaryRequest(
-                        date = date,
-                        mealType = MealType.Other,
-                        food = food,
-                        serving = serving,
-                        multiplier = item.numberOfUnits
-                    )
-                )
-            }
-        }
     }
 
     fun getFavorites(): Flow<List<Food>> = combine(
         oauth1TokenStore.hasTokens,
-        favoritesStore.foods
-    ) { hasOAuth1, localFoods -> Pair(hasOAuth1, localFoods) }
-        .flatMapLatest { (hasOAuth1, localFoods) ->
-            flow {
-                if (hasOAuth1) {
-                    val profile = withContext(Dispatchers.IO) {
-                        getProfileApi()?.let { api ->
-                            runCatching { api.getFavorites() }.getOrNull()?.body()
-                                ?.foods?.foodList(json)?.map { it.toDomain() } ?: emptyList()
-                        } ?: emptyList()
+        favoritesStore.foods,
+        favoritesRefreshTrigger
+    ) { hasOAuth1, localFoods, _ -> Triple(hasOAuth1, localFoods, 0) }
+        .flatMapLatest { (hasOAuth1, localFoods, _) ->
+            channelFlow {
+                if (!hasOAuth1) {
+                    send(localFoods.map { it.toDomain() })
+                    return@channelFlow
+                }
+                val cached = withContext(Dispatchers.IO) { favoritesRemoteCache.get(favoritesCacheKey) }
+                val local = localFoods.map { it.toDomain() }
+                send(if (!cached.isNullOrEmpty()) cached else local)
+                val skipBg = skipNextFavoritesBackgroundFetch.getAndSet(false)
+                if (skipBg) return@channelFlow
+                launch(Dispatchers.IO) {
+                    val api = getProfileApi() ?: return@launch
+                    val response = runCatching { api.getFavorites() }.getOrNull() ?: return@launch
+                    if (!response.isSuccessful) return@launch
+                    val profile = response.body()?.foods?.foodList(json)?.map { it.toDomain() } ?: emptyList()
+                    if (profile.isNotEmpty()) {
+                        favoritesRemoteCache.put(favoritesCacheKey, profile)
+                        send(profile)
                     }
-                    emit(if (profile.isEmpty()) localFoods.map { it.toDomain() } else profile)
-                } else {
-                    emit(localFoods.map { it.toDomain() })
                 }
             }
         }
 
     suspend fun addFavorite(food: Food) {
         favoritesStore.add(StoredFood.from(food))
+        favoritesRemoteCache.remove(favoritesCacheKey)
+        favoritesRefreshTrigger.value++
     }
 
     suspend fun removeFavorite(foodId: Long) {
         favoritesStore.remove(foodId)
+        favoritesRemoteCache.remove(favoritesCacheKey)
+        favoritesRefreshTrigger.value++
     }
 
     suspend fun isFavorite(foodId: Long): Boolean = favoritesStore.contains(foodId)

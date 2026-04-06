@@ -34,7 +34,9 @@ private fun RecipeEntity.toDomain() = Recipe(
     carbs = carbs,
     fat = fat,
     ingredients = ingredients,
-    types = types
+    types = types,
+    directions = emptyList(),
+    recipeUrl = null
 )
 
 private fun Recipe.toEntity() = RecipeEntity(

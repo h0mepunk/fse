@@ -10,5 +10,7 @@ data class Recipe(
     val carbs: Double,
     val fat: Double,
     val ingredients: List<String>,
-    val types: List<String>
+    val types: List<String>,
+    val directions: List<String> = emptyList(),
+    val recipeUrl: String? = null
 )

@@ -46,6 +46,11 @@ class RoomDiaryStore(
         diaryDao.deleteById(entryId)
     }
 
+    override suspend fun updatePortion(entry: DiaryEntry) {
+        ensureFoodAndServingExist(entry)
+        diaryDao.updatePortion(entry.id, entry.serving.id, entry.multiplier)
+    }
+
     private suspend fun ensureFoodAndServingExist(entry: DiaryEntry) {
         foodDao.insert(FoodEntity(
             id = entry.food.id,

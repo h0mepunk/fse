@@ -9,4 +9,5 @@ interface LocalDiaryStore {
     fun entriesForDate(date: LocalDate): Flow<List<DiaryEntry>>
     suspend fun add(entry: DiaryEntry)
     suspend fun remove(entryId: String)
+    suspend fun updatePortion(entry: DiaryEntry)
 }

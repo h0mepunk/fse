@@ -15,6 +15,9 @@ interface DiaryDao {
     @Query("DELETE FROM diary_entry WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    @Query("UPDATE diary_entry SET servingId = :servingId, multiplier = :multiplier WHERE id = :id")
+    suspend fun updatePortion(id: String, servingId: Long, multiplier: Double)
+
     @Query("SELECT * FROM diary_entry WHERE date = :date ORDER BY mealType, id")
     fun entriesForDate(date: LocalDate): kotlinx.coroutines.flow.Flow<List<DiaryEntryEntity>>
 

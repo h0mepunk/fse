@@ -206,6 +206,12 @@ object FatSecretDto {
     }
 
     @Serializable
+    data class RecipeGetV2Wrapper(
+        val recipe: JsonElement? = null,
+        val error: ErrorResponse? = null
+    )
+
+    @Serializable
     data class RecipesSearchWrapper(
         val recipes: RecipesResponse? = null,
         val error: ErrorResponse? = null

@@ -1,23 +1,24 @@
 package com.example.fse.data.repository
 
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-
 import com.example.fse.data.api.FatSecretClient
 import com.example.fse.data.api.FatSecretDto
 import com.example.fse.data.api.FatSecretProfileDto
+import com.example.fse.data.local.SearchCache
 import com.example.fse.domain.model.Recipe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
 
-@OptIn(ExperimentalCoroutinesApi::class)
 class RecipeRepository(
     private val fatSecretAuth: com.example.fse.data.auth.FatSecretAuth,
     private val recipeStore: com.example.fse.data.local.LocalRecipeStore,
@@ -35,31 +36,42 @@ class RecipeRepository(
 
     private val refreshTrigger = MutableStateFlow(0)
 
+    private val myFavoritesCache = SearchCache<List<Recipe>>(ttlMs = 24 * 60 * 60 * 1000L)
+
+    private val myFavoritesCacheKey = "my_recipe_favorites"
+
+    private val favoritesLoadMutex = Mutex()
+
     fun triggerMyRecipesRefresh() { refreshTrigger.value++ }
 
     /**
      * Flow of user's favorite recipes from FatSecret (when connected via 3-legged OAuth).
-     * Empty when not connected.
+     * Serves cached list first, then refreshes from the API. Mutex avoids cancelling in-flight requests on refresh.
      */
-    fun getUserFavoriteRecipes(): Flow<List<Recipe>> = combine(
-        oauth1TokenStore.hasTokens,
-        refreshTrigger
-    ) { hasTokens, _ -> hasTokens }
-        .flatMapLatest { hasTokens ->
-            flow {
-                if (hasTokens) {
-                    val recipes = withContext(Dispatchers.IO) {
-                        getProfileApi()?.let { api ->
-                            runCatching { api.getRecipeFavorites() }.getOrNull()?.body()
-                                ?.recipes?.recipeList(json)?.map { it.toRecipe() } ?: emptyList()
-                        } ?: emptyList()
+    fun getUserFavoriteRecipes(): Flow<List<Recipe>> = flow {
+        combine(oauth1TokenStore.hasTokens, refreshTrigger) { hasTokens, _ -> hasTokens }
+            .collect { hasTokens ->
+                favoritesLoadMutex.withLock {
+                    if (hasTokens) {
+                        val cached = withContext(Dispatchers.IO) { myFavoritesCache.get(myFavoritesCacheKey) }
+                        if (cached != null) emit(cached)
+                        val recipes = withContext(Dispatchers.IO) {
+                            getProfileApi()?.let { api ->
+                                runCatching { api.getRecipeFavorites() }.getOrNull()?.body()
+                                    ?.recipes?.recipeList(json)?.map { it.toRecipe() } ?: emptyList()
+                            } ?: emptyList()
+                        }
+                        withContext(Dispatchers.IO) {
+                            myFavoritesCache.put(myFavoritesCacheKey, recipes)
+                        }
+                        emit(recipes)
+                    } else {
+                        val stale = withContext(Dispatchers.IO) { myFavoritesCache.get(myFavoritesCacheKey) }
+                        emit(stale ?: emptyList())
                     }
-                    emit(recipes)
-                } else {
-                    emit(emptyList())
                 }
             }
-        }
+    }
 
     suspend fun searchRecipes(query: String, page: Int = 0): Result<List<Recipe>> {
         val profileApi = getProfileApi()
@@ -100,6 +112,23 @@ class RecipeRepository(
             Unit
         }
     }
+
+    suspend fun getRecipeById(recipeId: Long): Result<Recipe> = withContext(Dispatchers.IO) {
+        runCatching {
+            val tokens = oauth1TokenStore.getTokens()
+            val api = if (tokens != null) {
+                FatSecretClient.createPlatformApiWithOAuth1(tokens.first, tokens.second)
+            } else {
+                getApi() ?: throw Exception("Connect FatSecret in Account to load recipe details")
+            }
+            val response = api.getRecipeV2(recipeId)
+            if (!response.isSuccessful) throw Exception("Recipe request failed: ${response.code()}")
+            val wrapper = response.body() ?: throw Exception("Empty response")
+            wrapper.error?.let { throw Exception(it.message ?: "API error ${it.code}") }
+            val recipeEl = wrapper.recipe ?: throw Exception("No recipe in response")
+            parseRecipeGetV2(recipeEl)
+        }
+    }
 }
 
 private fun FatSecretProfileDto.ProfileRecipeItem.toRecipe(): Recipe = Recipe(
@@ -112,7 +141,8 @@ private fun FatSecretProfileDto.ProfileRecipeItem.toRecipe(): Recipe = Recipe(
     carbs = 0.0,
     fat = 0.0,
     ingredients = emptyList(),
-    types = emptyList()
+    types = emptyList(),
+    recipeUrl = recipe_url
 )
 
 private fun FatSecretDto.RecipeItemDto.toRecipe(): Recipe {
@@ -133,4 +163,29 @@ private fun FatSecretDto.RecipeItemDto.toRecipe(): Recipe {
         ingredients = parseStringList(recipe_ingredients?.ingredient),
         types = parseStringList(recipe_types?.recipe_type)
     )
+}
+
+private val recipeDetailJson = FatSecretClient.json
+
+private fun parseRecipeDirections(directionsEl: JsonElement?): List<String> {
+    if (directionsEl == null) return emptyList()
+    val dirObj = directionsEl as? JsonObject ?: return emptyList()
+    val d = dirObj["direction"] ?: return emptyList()
+    fun stepText(el: JsonElement): String? {
+        val o = el as? JsonObject ?: return null
+        return (o["direction_description"] as? JsonPrimitive)?.content
+    }
+    return when (d) {
+        is JsonArray -> d.mapNotNull { stepText(it) }
+        else -> listOfNotNull(stepText(d))
+    }
+}
+
+private fun parseRecipeGetV2(el: JsonElement): Recipe {
+    val dto = recipeDetailJson.decodeFromJsonElement(FatSecretDto.RecipeItemDto.serializer(), el)
+    val base = dto.toRecipe()
+    val obj = el as? JsonObject ?: return base
+    val url = (obj["recipe_url"] as? JsonPrimitive)?.content ?: base.recipeUrl
+    val directions = parseRecipeDirections(obj["directions"])
+    return base.copy(recipeUrl = url, directions = directions)
 }

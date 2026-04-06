@@ -44,6 +44,12 @@ interface FatSecretApi {
         @Query("max_results") maxResults: Int = 20,
         @Query("format") format: String = "json"
     ): Response<FatSecretDto.RecipesSearchWrapper>
+
+    @GET("rest/recipe/v2")
+    suspend fun getRecipeV2(
+        @Query("recipe_id") recipeId: Long,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretDto.RecipeGetV2Wrapper>
 }
 
 /**

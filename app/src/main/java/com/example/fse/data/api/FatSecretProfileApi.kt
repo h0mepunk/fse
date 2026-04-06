@@ -4,6 +4,7 @@ import retrofit2.Response
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Query
 
 /**
@@ -31,6 +32,14 @@ interface FatSecretProfileApi {
     @DELETE("rest/food-entries/v1")
     suspend fun deleteFoodEntry(
         @Query("food_entry_id") foodEntryId: String,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretProfileDto.SuccessResponse>
+
+    @PUT("rest/food-entries/v1")
+    suspend fun editFoodEntry(
+        @Query("food_entry_id") foodEntryId: Long,
+        @Query("number_of_units") numberOfUnits: Double,
+        @Query("serving_id") servingId: Long? = null,
         @Query("format") format: String = "json"
     ): Response<FatSecretProfileDto.SuccessResponse>
 
@@ -65,7 +74,6 @@ interface FatSecretProfileApi {
 
     @GET("rest/saved-meals/v2")
     suspend fun getSavedMeals(
-        @Query("meal") meal: String? = null,
         @Query("format") format: String = "json"
     ): Response<FatSecretProfileDto.SavedMealsWrapper>
 
@@ -74,4 +82,36 @@ interface FatSecretProfileApi {
         @Query("saved_meal_id") savedMealId: Long,
         @Query("format") format: String = "json"
     ): Response<FatSecretProfileDto.SavedMealItemsWrapper>
+
+    @POST("rest/saved-meals/item/v1")
+    suspend fun addSavedMealItem(
+        @Query("saved_meal_id") savedMealId: Long,
+        @Query("food_id") foodId: Long,
+        @Query("saved_meal_item_name") itemName: String,
+        @Query("serving_id") servingId: Long,
+        @Query("number_of_units") numberOfUnits: Double,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretProfileDto.SavedMealItemIdResponse>
+
+    @PUT("rest/saved-meals/item/v1")
+    suspend fun editSavedMealItem(
+        @Query("saved_meal_item_id") itemId: Long,
+        @Query("number_of_units") numberOfUnits: Double,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretProfileDto.SuccessResponse>
+
+    @DELETE("rest/saved-meals/item/v1")
+    suspend fun deleteSavedMealItem(
+        @Query("saved_meal_item_id") itemId: Long,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretProfileDto.SuccessResponse>
+
+    @POST("rest/food-entries/copy/saved-meal/v1")
+    suspend fun copySavedMealToDiary(
+        @Query("saved_meal_id") savedMealId: Long,
+        @Query("meal") meal: String,
+        @Query("date") dateInt: Int,
+        @Query("format") format: String = "json"
+    ): Response<FatSecretProfileDto.SuccessResponse>
+
 }

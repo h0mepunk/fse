@@ -186,4 +186,11 @@ object FatSecretProfileDto {
         val serving_id: String = "",
         val number_of_units: String = "1"
     )
+
+    @Serializable
+    data class SavedMealItemIdResponse(
+        val saved_meal_item_id: SuccessValue? = null
+    ) {
+        fun idLong(): Long? = saved_meal_item_id?.value?.toLongOrNull()
+    }
 }
